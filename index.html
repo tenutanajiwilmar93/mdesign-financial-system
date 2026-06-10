@@ -200,7 +200,7 @@ if(configured) sb=createClient(_url, _key);
 
 /* ============ STATE ============ */
 let current=null; // {id,name,role,active}
-let DB={projects:[],expenses:[],employees:[],payments:[],profiles:[],seen:{}};
+let DB={projects:[],expenses:[],employees:[],payments:[],profiles:[],seen:{},leaveAllowances:[],leaveUsages:[]};
 
 /* ============ FORMAT & TANGGAL ============ */
 const MONTHS=['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'];
@@ -275,14 +275,16 @@ function diffLine(label,o,n){if(o===n)return'';const d=n-o;const cls=d>0?'up':'d
 
 /* ============ DATA: muat dari Supabase ============ */
 async function refreshAll(){
-  const [proj,exp,emp,sal,pay,prof,seen]=await Promise.all([
+  const [proj,exp,emp,sal,pay,prof,seen,la,lu]=await Promise.all([
     sb.from('projects').select('*'),
     sb.from('expenses').select('*'),
     sb.from('employees').select('*'),
     sb.from('salaries').select('*'),
     sb.from('salary_payments').select('*'),
     sb.from('profiles').select('*'),
-    sb.from('statement_seen').select('*').eq('user_id',current.id)
+    sb.from('statement_seen').select('*').eq('user_id',current.id),
+    sb.from('leave_allowances').select('*'),
+    sb.from('leave_usages').select('*')
   ]);
   DB.profiles=prof.data||[];
   const nameOf=id=>{const p=DB.profiles.find(x=>x.id===id);return p?p.name:'-';};
@@ -292,6 +294,8 @@ async function refreshAll(){
   DB.employees=(emp.data||[]).map(r=>({id:r.id,name:r.name,position:r.position||'',active:r.active,salaries:byEmp[r.id]||[]}));
   DB.payments=(pay.data||[]).map(r=>({id:r.id,employeeId:r.employee_id,period:r.period,amount:Number(r.amount)}));
   DB.seen={};(seen.data||[]).forEach(r=>{DB.seen[String(r.month_idx)]={inc:Number(r.inc),exp:Number(r.exp),opening:Number(r.opening),ts:r.seen_at};});
+  DB.leaveAllowances=(la.data||[]).map(r=>({id:r.id,employeeId:r.employee_id,year:r.year,days:r.days,note:r.note||'',createdAt:r.created_at}));
+  DB.leaveUsages=(lu.data||[]).map(r=>({id:r.id,employeeId:r.employee_id,year:r.year,startDate:r.start_date,days:r.days,note:r.note||'',createdAt:r.created_at}));
 }
 
 /* ============ AUTH ============ */
@@ -506,31 +510,45 @@ function viewPengeluaran(){
     <table><thead><tr><th>Kategori / Catatan</th><th>Tanggal & Jam</th><th>Oleh</th><th style="text-align:right">Jumlah</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
-/* ---------- KARYAWAN & GAJI ---------- */
+/* ============ CUTI ============ */
 let salaryEditEmpId=null;
+let leaveEditEmpId=null;
+function leaveAllotment(empId,year){return DB.leaveAllowances.filter(a=>a.employeeId===empId&&a.year===year).reduce((s,a)=>s+a.days,0);}
+function leaveUsed(empId,year){return DB.leaveUsages.filter(u=>u.employeeId===empId&&u.year===year).reduce((s,u)=>s+u.days,0);}
+function leaveRemaining(empId,year){return leaveAllotment(empId,year)-leaveUsed(empId,year);}
+/* ---------- KARYAWAN & GAJI ---------- */
 function viewKaryawan(){
-  const emp=DB.employees;const period=thisPeriod();
+  const emp=DB.employees;const period=thisPeriod();const curYear=new Date().getFullYear();
   const paid=new Set(DB.payments.filter(s=>s.period===period).map(s=>s.employeeId));
   const act=emp.filter(e=>e.active);
   const totalGaji=act.reduce((a,e)=>a+salaryFor(e,period),0);
   const sisa=act.filter(e=>!paid.has(e.id)).reduce((a,e)=>a+salaryFor(e,period),0);
-  const editEmp=salaryEditEmpId?emp.find(e=>e.id===salaryEditEmpId):null;
+  const salEditEmp=salaryEditEmpId?emp.find(e=>e.id===salaryEditEmpId):null;
+  const leaveEditEmp=leaveEditEmpId?emp.find(e=>e.id===leaveEditEmpId):null;
   const rows=emp.length?emp.map(e=>{
     const isPaid=paid.has(e.id);const rec=salaryRecord(e,period);const gaji=rec?rec.amount:0;
+    const jatah=leaveAllotment(e.id,curYear);const terpakai=leaveUsed(e.id,curYear);const sisa2=jatah-terpakai;
+    const cutiPill=jatah>0
+      ?(sisa2<0?`<span class="pill exp">${sisa2} hari</span>`
+        :sisa2===0?`<span class="pill role">0 / ${jatah} hari</span>`
+        :`<span class="pill inc">${sisa2} / ${jatah} hari</span>`)
+      :'<span class="dt">belum diatur</span>';
     return `<tr>
       <td><b>${esc(e.name)}</b>${!e.active?' <span class="pill role">nonaktif</span>':''}</td>
       <td class="dt">${esc(e.position||'-')}</td>
       <td class="mono">${rec?rp(gaji):'<span class="dt">belum diatur</span>'}${rec?`<div class="dt">berlaku ${monthShort(rec.effectiveMonth)}</div>`:''}</td>
       <td>${e.active?(isPaid?`<span class="pill inc">✓ Dibayar ${monthShort(period)}</span>`:(gaji>0?'<span class="pill gold">Belum dibayar</span>':'<span class="dt">—</span>')):'<span class="dt">—</span>'}</td>
+      <td>${cutiPill}</td>
       <td style="text-align:right;white-space:nowrap">
         ${e.active&&!isPaid&&gaji>0?`<button class="btn btn-gold btn-sm" data-pay="${e.id}">Bayar Gaji</button>`:''}
         <button class="btn btn-ghost btn-sm" data-atur="${e.id}">Atur Gaji</button>
+        <button class="btn btn-ghost btn-sm" data-atur-cuti="${e.id}">Atur Cuti</button>
         <button class="btn btn-ghost btn-sm" data-edit-emp="${e.id}">Ubah</button>
         <button class="btn btn-danger btn-sm" data-del-emp="${e.id}">Hapus</button>
       </td></tr>`;
-  }).join(''):`<tr><td colspan="5"><div class="empty"><span class="serif">Belum ada karyawan</span>Tambahkan karyawan untuk mulai mencatat gaji.</div></td></tr>`;
+  }).join(''):`<tr><td colspan="6"><div class="empty"><span class="serif">Belum ada karyawan</span>Tambahkan karyawan untuk mulai mencatat gaji.</div></td></tr>`;
   return `
-  <div class="page-head"><h1 class="serif">Karyawan & Gaji</h1><p>Kelola karyawan dan riwayat gaji (dengan bulan berlaku). Pembayaran otomatis tercatat sebagai pengeluaran.</p></div>
+  <div class="page-head"><h1 class="serif">Karyawan & Gaji</h1><p>Kelola karyawan, riwayat gaji, dan pencatatan cuti tahunan.</p></div>
   <div class="stat-grid">
     <div class="stat bal"><div class="bar"></div><div class="tag">Karyawan Aktif</div><div class="val mono">${act.length}</div></div>
     <div class="stat exp"><div class="bar"></div><div class="tag">Total Gaji ${monthShort(period)}</div><div class="val mono">${rp(totalGaji)}</div></div>
@@ -550,9 +568,10 @@ function viewKaryawan(){
       <button class="btn" id="empSave">Simpan Karyawan</button>
       <button class="btn btn-ghost hidden" id="empCancel">Batal</button>
     </div></div>
-  ${editEmp?salaryPanel(editEmp):''}
+  ${salEditEmp?salaryPanel(salEditEmp):''}
+  ${leaveEditEmp?leavePanel(leaveEditEmp):''}
   <div class="panel"><div class="panel-head"><h2>Daftar Karyawan</h2>${sisa>0?`<button class="btn btn-gold btn-sm" id="payAll">Bayar Semua Gaji (${monthShort(period)})</button>`:''}</div>
-    <table><thead><tr><th>Nama</th><th>Jabatan</th><th>Gaji Berlaku</th><th>Status ${monthShort(period)}</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
+    <table><thead><tr><th>Nama</th><th>Jabatan</th><th>Gaji Berlaku</th><th>Status ${monthShort(period)}</th><th>Sisa Cuti ${curYear}</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 function salaryPanel(e){
   const period=thisPeriod();
@@ -577,6 +596,79 @@ function salaryPanel(e){
     <table><thead><tr><th>Berlaku Mulai</th><th>Gaji</th><th>Perubahan</th><th>Catatan</th><th></th></tr></thead><tbody>${rows}</tbody></table>
   </div>`;
 }
+
+function leavePanel(e){
+  const curYear=new Date().getFullYear();
+  // year selector: 2 tahun lalu s/d tahun ini
+  const years=[curYear,curYear-1,curYear-2];
+  const selYear=DB._leaveYear||curYear;
+  const yearOpts=years.map(y=>`<option value="${y}" ${y===selYear?'selected':''}>${y}</option>`).join('');
+  const jatah=leaveAllotment(e.id,selYear);
+  const terpakai=leaveUsed(e.id,selYear);
+  const sisa=jatah-terpakai;
+
+  // riwayat alokasi
+  const allocs=DB.leaveAllowances.filter(a=>a.employeeId===e.id&&a.year===selYear)
+    .slice().sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt));
+  const allocRows=allocs.length?allocs.map(a=>`<tr>
+    <td>${new Date(a.createdAt).toLocaleDateString('id-ID',{day:'2-digit',month:'short',year:'numeric'})}</td>
+    <td class="mono ${a.days>=0?'amt-inc':'amt-exp'}">${a.days>=0?'+':''}${a.days} hari</td>
+    <td class="dt">${a.note?esc(a.note):'—'}</td>
+    <td style="text-align:right"><button class="btn btn-danger btn-sm" data-del-alloc="${a.id}">Hapus</button></td>
+  </tr>`).join(''):`<tr><td colspan="4"><div class="empty">Belum ada alokasi untuk ${selYear}.</div></td></tr>`;
+
+  // riwayat pemakaian
+  const usages=DB.leaveUsages.filter(u=>u.employeeId===e.id&&u.year===selYear)
+    .slice().sort((a,b)=>new Date(b.startDate)-new Date(a.startDate));
+  const usageRows=usages.length?usages.map(u=>`<tr>
+    <td>${new Date(u.startDate+'T00:00:00').toLocaleDateString('id-ID',{day:'2-digit',month:'short',year:'numeric'})}</td>
+    <td class="mono">${u.days} hari</td>
+    <td class="dt">${u.note?esc(u.note):'—'}</td>
+    <td style="text-align:right"><button class="btn btn-danger btn-sm" data-del-usage="${u.id}">Hapus</button></td>
+  </tr>`).join(''):`<tr><td colspan="4"><div class="empty">Belum ada pemakaian cuti untuk ${selYear}.</div></td></tr>`;
+
+  return `<div class="panel" style="border-color:var(--blue)">
+    <div class="panel-head">
+      <h2>Cuti — ${esc(e.name)}</h2>
+      <div style="display:flex;align-items:center;gap:10px">
+        <select class="inp" id="leavePanelYear" style="width:auto">${yearOpts}</select>
+        <button class="btn btn-ghost btn-sm" id="leaveClose">Tutup</button>
+      </div>
+    </div>
+    <div class="panel-body">
+      <!-- Ringkasan -->
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:22px">
+        <div class="stat bal" style="padding:16px"><div class="bar"></div><div class="tag">Jatah ${selYear}</div><div class="val mono" style="font-size:20px">${jatah} hari</div></div>
+        <div class="stat exp" style="padding:16px"><div class="bar"></div><div class="tag">Terpakai</div><div class="val mono" style="font-size:20px">${terpakai} hari</div></div>
+        <div class="stat ${sisa<0?'exp':sisa===0?'bal':'inc'}" style="padding:16px"><div class="bar"></div><div class="tag">Sisa</div><div class="val mono" style="font-size:20px">${sisa} hari</div></div>
+      </div>
+      <!-- Form alokasi jatah -->
+      <p class="dt" style="font-weight:600;margin-bottom:10px">Tambah / Koreksi Jatah Cuti ${selYear}</p>
+      <div class="form-row">
+        <div><label class="lab">Jumlah hari (negatif untuk koreksi)</label><input class="inp mono" id="allocDays" type="number" placeholder="mis. 12 atau -1" /></div>
+        <div><label class="lab">Catatan / Alasan</label><input class="inp" id="allocNote" placeholder="mis. Jatah tahunan, Bonus cuti" /></div>
+      </div>
+      <button class="btn btn-green" id="allocSave" style="margin-bottom:22px">Simpan Alokasi</button>
+      <!-- Form pemakaian cuti -->
+      <p class="dt" style="font-weight:600;margin-bottom:10px">Catat Pemakaian Cuti</p>
+      <div class="form-row">
+        <div><label class="lab">Tanggal mulai</label><input class="inp" id="usageDate" type="date" /></div>
+        <div><label class="lab">Jumlah hari</label><input class="inp mono" id="usageDays" type="number" min="1" placeholder="1" /></div>
+        <div><label class="lab">Keterangan</label><input class="inp" id="usageNote" placeholder="mis. Liburan keluarga" /></div>
+      </div>
+      <button class="btn" id="usageSave">Catat Pemakaian</button>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:0;border-top:1px solid var(--line-soft)">
+      <div>
+        <div style="padding:14px 22px;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);border-bottom:1px solid var(--line-soft);border-right:1px solid var(--line-soft)">Riwayat Alokasi Jatah</div>
+        <table><thead><tr><th>Tanggal</th><th>Hari</th><th>Catatan</th><th></th></tr></thead><tbody>${allocRows}</tbody></table>
+      </div>
+      <div style="border-left:1px solid var(--line-soft)">
+        <div style="padding:14px 22px;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);border-bottom:1px solid var(--line-soft)">Riwayat Pemakaian</div>
+        <table><thead><tr><th>Tanggal Mulai</th><th>Hari</th><th>Keterangan</th><th></th></tr></thead><tbody>${usageRows}</tbody></table>
+      </div>
+    </div>
+  </div>`;}
 
 /* ---------- PENGGUNA (manajemen peran) ---------- */
 function viewPengguna(){
@@ -621,7 +713,7 @@ function bindHandlers(){
   if($('empCancel'))$('empCancel').onclick=resetEmpForm;
   document.querySelectorAll('[data-edit-emp]').forEach(b=>b.onclick=()=>editEmp(b.dataset.editEmp));
   document.querySelectorAll('[data-del-emp]').forEach(b=>b.onclick=()=>delEmp(b.dataset.delEmp));
-  document.querySelectorAll('[data-atur]').forEach(b=>b.onclick=()=>{salaryEditEmpId=b.dataset.atur;render();window.scrollTo({top:0,behavior:'smooth'});});
+  document.querySelectorAll('[data-atur]').forEach(b=>b.onclick=()=>{salaryEditEmpId=b.dataset.atur;leaveEditEmpId=null;render();window.scrollTo({top:0,behavior:'smooth'});});
   document.querySelectorAll('[data-pay]').forEach(b=>b.onclick=()=>payOne(b.dataset.pay));
   if($('payAll'))$('payAll').onclick=payAll;
   if($('salClose'))$('salClose').onclick=()=>{salaryEditEmpId=null;render();};
@@ -629,7 +721,15 @@ function bindHandlers(){
   bindRpInput('salAmt');
   bindRpInput('empSalary');
   document.querySelectorAll('[data-del-sal]').forEach(b=>b.onclick=()=>delSalary(b.dataset.delSal));
-  document.querySelectorAll('[data-role-for]').forEach(s=>s.onchange=()=>changeRole(s.dataset.roleFor,s.value));
+  document.querySelectorAll('[data-atur-cuti]').forEach(b=>b.onclick=()=>{
+    leaveEditEmpId=b.dataset.aturCuti;salaryEditEmpId=null;
+    DB._leaveYear=new Date().getFullYear();render();window.scrollTo({top:0,behavior:'smooth'});});
+  if($('leaveClose'))$('leaveClose').onclick=()=>{leaveEditEmpId=null;render();};
+  if($('leavePanelYear'))$('leavePanelYear').onchange=e=>{DB._leaveYear=parseInt(e.target.value);render();};
+  if($('allocSave'))$('allocSave').onclick=saveAlloc;
+  if($('usageSave'))$('usageSave').onclick=saveUsage;
+  document.querySelectorAll('[data-del-alloc]').forEach(b=>b.onclick=()=>delAlloc(b.dataset.delAlloc));
+  document.querySelectorAll('[data-del-usage]').forEach(b=>b.onclick=()=>delUsage(b.dataset.delUsage));
   document.querySelectorAll('[data-toggle-active]').forEach(b=>b.onclick=()=>toggleActive(b.dataset.toggleActive));
   if($('refreshUsers'))$('refreshUsers').onclick=async()=>{await refreshAll();render();toast('Diperbarui');};
 }
@@ -682,7 +782,7 @@ function editEmp(id){const e=DB.employees.find(x=>x.id===id);if(!e)return;
   $('empId').value=e.id;$('empName').value=e.name;$('empPos').value=e.position||'';
   $('empSalaryGroup').classList.add('hidden');$('empFormTitle').textContent='Ubah Karyawan (nama & jabatan)';$('empCancel').classList.remove('hidden');window.scrollTo({top:0,behavior:'smooth'});}
 function resetEmpForm(){if(!$('empId'))return;$('empId').value='';$('empName').value='';$('empPos').value='';if($('empSalary'))$('empSalary').value='';$('empSalaryGroup').classList.remove('hidden');$('empFormTitle').textContent='Tambah Karyawan';$('empCancel').classList.add('hidden');}
-async function delEmp(id){if(!await uiConfirm('Hapus karyawan ini? Riwayat gaji yang sudah dibayar tetap tersimpan.','Hapus'))return;if(salaryEditEmpId===id)salaryEditEmpId=null;guard(sb.from('employees').delete().eq('id',id),'Karyawan dihapus');}
+async function delEmp(id){if(!await uiConfirm('Hapus karyawan ini? Riwayat gaji yang sudah dibayar tetap tersimpan.','Hapus'))return;if(salaryEditEmpId===id)salaryEditEmpId=null;if(leaveEditEmpId===id)leaveEditEmpId=null;guard(sb.from('employees').delete().eq('id',id),'Karyawan dihapus');}
 async function addSalary(){const e=DB.employees.find(x=>x.id===salaryEditEmpId);if(!e)return;
   const amt=rpVal($('salAmt'));const eff=readMY('salEff');const note=$('salNote').value.trim();
   if(!(amt>=0)){toast('Gaji tidak valid');return;}
@@ -705,7 +805,24 @@ async function payAll(){const period=thisPeriod();
   let ok=0;for(const e of todo){const {error}=await sb.rpc('record_salary_payment',{p_employee:e.id,p_period:period});if(!error)ok++;}
   await refreshAll();render();toast(`${ok} gaji dibayar ✓`);}
 
-/* pengguna */
+/* cuti */
+async function saveAlloc(){
+  const days=parseInt($('allocDays').value);const note=$('allocNote').value.trim();
+  const year=DB._leaveYear||new Date().getFullYear();
+  if(isNaN(days)||days===0){toast('Jumlah hari tidak boleh 0');return;}
+  await guard(sb.from('leave_allowances').insert({employee_id:leaveEditEmpId,year,days,note,created_by:current.id}),'Alokasi cuti disimpan ✓');
+  if($('allocDays')){$('allocDays').value='';$('allocNote').value='';}
+}
+async function saveUsage(){
+  const date=$('usageDate').value;const days=parseInt($('usageDays').value);const note=$('usageNote').value.trim();
+  const year=DB._leaveYear||new Date().getFullYear();
+  if(!date){toast('Tanggal mulai wajib diisi');return;}
+  if(!(days>0)){toast('Jumlah hari harus lebih dari 0');return;}
+  await guard(sb.from('leave_usages').insert({employee_id:leaveEditEmpId,year,start_date:date,days,note,created_by:current.id}),'Pemakaian cuti dicatat ✓');
+  if($('usageDate')){$('usageDate').value='';$('usageDays').value='';$('usageNote').value='';}
+}
+async function delAlloc(id){if(!await uiConfirm('Hapus alokasi cuti ini?','Hapus'))return;guard(sb.from('leave_allowances').delete().eq('id',id),'Alokasi dihapus');}
+async function delUsage(id){if(!await uiConfirm('Hapus pemakaian cuti ini?','Hapus'))return;guard(sb.from('leave_usages').delete().eq('id',id),'Pemakaian dihapus');}
 async function changeRole(id,role){guard(sb.from('profiles').update({role}).eq('id',id),'Peran diperbarui ✓');}
 async function toggleActive(id){const u=DB.profiles.find(x=>x.id===id);if(!u)return;guard(sb.from('profiles').update({active:!(u.active!==false)}).eq('id',id),'Status diperbarui ✓');}
 
