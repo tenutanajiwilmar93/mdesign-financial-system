@@ -188,13 +188,15 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
 /* ============ KONFIGURASI ============ */
-const SUPABASE_URL = 'https://fqduybugcuueplxqhfjk.supabase.co';
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZxZHV5YnVnY3V1ZXBseHFoZmprIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA2MzU1MjEsImV4cCI6MjA5NjIxMTUyMX0.e0DvYRzTPOTLnUmKAadioTHeiKhdSjEjgskaot9qvx0';
+const SUPABASE_URL = 'GANTI_DENGAN_URL_SUPABASE_ANDA';
+const SUPABASE_ANON_KEY = 'GANTI_DENGAN_ANON_KEY_ANDA';
 
 const $=id=>document.getElementById(id);
-const configured = SUPABASE_URL.startsWith('http') && SUPABASE_ANON_KEY.length>20;
+const _url=SUPABASE_URL.trim().replace(/\/+$/,'');
+const _key=SUPABASE_ANON_KEY.trim();
+const configured = _url.startsWith('http') && _key.length>20;
 let sb=null;
-if(configured) sb=createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+if(configured) sb=createClient(_url, _key);
 
 /* ============ STATE ============ */
 let current=null; // {id,name,role,active}
@@ -203,6 +205,16 @@ let DB={projects:[],expenses:[],employees:[],payments:[],profiles:[],seen:{}};
 /* ============ FORMAT & TANGGAL ============ */
 const MONTHS=['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'];
 const rp=n=>'Rp '+(Math.round(Number(n)||0)).toLocaleString('id-ID');
+/* Format input angka: strip non-digit, format titik ribuan, kembalikan nilai numerik */
+function rpFmt(raw){const digits=String(raw).replace(/\D/g,'');return digits===''?'':Number(digits).toLocaleString('id-ID');}
+function rpVal(inputEl){return Number(String(inputEl.value).replace(/\./g,'').replace(/\D/g,''))||0;}
+function bindRpInput(id){const el=$(id);if(!el)return;
+  el.addEventListener('input',()=>{const pos=el.selectionStart,oldLen=el.value.length;
+    el.value=rpFmt(el.value);const newLen=el.value.length;
+    try{el.setSelectionRange(pos+(newLen-oldLen),pos+(newLen-oldLen));}catch(e){}});
+  el.addEventListener('focus',()=>{if(el.value==='0')el.value='';});
+  el.addEventListener('blur',()=>{if(el.value==='')el.value='';});
+}
 function fmtDateTime(iso){const d=new Date(iso);return{tgl:d.toLocaleDateString('id-ID',{day:'2-digit',month:'short',year:'numeric'}),jam:d.toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit'})};}
 function ymOf(iso){const d=new Date(iso);return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');}
 function mIdx(ym){const [y,m]=String(ym).split('-').map(Number);return y*12+(m-1);}
@@ -276,7 +288,7 @@ async function refreshAll(){
   const nameOf=id=>{const p=DB.profiles.find(x=>x.id===id);return p?p.name:'-';};
   DB.projects=(proj.data||[]).map(r=>({id:r.id,name:r.name,client:r.client||'',value:Number(r.value),startMonth:r.start_month,endMonth:r.end_month,status:r.status}));
   DB.expenses=(exp.data||[]).map(r=>({id:r.id,category:r.category,amount:Number(r.amount),note:r.note||'',datetime:r.occurred_at,createdBy:nameOf(r.created_by),source:r.source}));
-  const byEmp={};(sal.data||[]).forEach(r=>{(byEmp[r.employee_id]=byEmp[r.employee_id]||[]).push({id:r.id,effectiveMonth:r.effective_month,amount:Number(r.amount)});});
+  const byEmp={};(sal.data||[]).forEach(r=>{(byEmp[r.employee_id]=byEmp[r.employee_id]||[]).push({id:r.id,effectiveMonth:r.effective_month,amount:Number(r.amount),note:r.note||''});});
   DB.employees=(emp.data||[]).map(r=>({id:r.id,name:r.name,position:r.position||'',active:r.active,salaries:byEmp[r.id]||[]}));
   DB.payments=(pay.data||[]).map(r=>({id:r.id,employeeId:r.employee_id,period:r.period,amount:Number(r.amount)}));
   DB.seen={};(seen.data||[]).forEach(r=>{DB.seen[String(r.month_idx)]={inc:Number(r.inc),exp:Number(r.exp),opening:Number(r.opening),ts:r.seen_at};});
@@ -456,7 +468,7 @@ function viewProyek(){
       <div class="form-row">
         <div><label class="lab">Nama proyek</label><input class="inp" id="projName" placeholder="mis. Desain Rumah Bpk. Andi" /></div>
         <div><label class="lab">Klien</label><input class="inp" id="projClient" placeholder="Nama klien" /></div>
-        <div><label class="lab">Nilai penawaran (Rp)</label><input class="inp mono" id="projValue" type="number" min="0" placeholder="60000000" /></div>
+        <div><label class="lab">Nilai penawaran (Rp)</label><input class="inp mono" id="projValue" type="text" inputmode="numeric" placeholder="60.000.000" /></div>
       </div>
       <div class="form-row">
         <div><label class="lab">Bulan mulai</label>${monthYearPicker('projStart',def)}</div>
@@ -485,7 +497,7 @@ function viewPengeluaran(){
     <div class="panel-body">
       <div class="form-row">
         <div><label class="lab">Kategori</label><input class="inp" id="exCat" placeholder="mis. Material, Transport, Sewa" /></div>
-        <div><label class="lab">Jumlah (Rp)</label><input class="inp mono" id="exAmt" type="number" min="0" placeholder="0" /></div>
+        <div><label class="lab">Jumlah (Rp)</label><input class="inp mono" id="exAmt" type="text" inputmode="numeric" placeholder="0" /></div>
         <div><label class="lab">Catatan (opsional)</label><input class="inp" id="exNote" placeholder="keterangan singkat" /></div>
       </div>
       <button class="btn" id="exSave">Simpan Pengeluaran</button>
@@ -532,7 +544,7 @@ function viewKaryawan(){
         <div><label class="lab">Jabatan</label><input class="inp" id="empPos" placeholder="mis. Drafter" /></div>
       </div>
       <div class="form-row" id="empSalaryGroup">
-        <div><label class="lab">Gaji awal (Rp)</label><input class="inp mono" id="empSalary" type="number" min="0" placeholder="0" /></div>
+        <div><label class="lab">Gaji awal (Rp)</label><input class="inp mono" id="empSalary" type="text" inputmode="numeric" placeholder="0" /></div>
         <div><label class="lab">Berlaku mulai</label>${monthYearPicker('empSalEff',thisPeriod())}</div>
       </div>
       <button class="btn" id="empSave">Simpan Karyawan</button>
@@ -546,20 +558,23 @@ function salaryPanel(e){
   const period=thisPeriod();
   const hist=(e.salaries||[]).slice().sort((a,b)=>mIdx(b.effectiveMonth)-mIdx(a.effectiveMonth));
   const rows=hist.length?hist.map((s,i)=>`<tr>
-     <td>${monthLabel(s.effectiveMonth)}</td><td class="mono">${rp(s.amount)}</td>
-     <td class="dt">${i<hist.length-1?('+'+rp(s.amount-hist[i+1].amount)):'gaji awal'}</td>
-     <td style="text-align:right">${hist.length>1?`<button class="btn btn-danger btn-sm" data-del-sal="${s.id}">Hapus</button>`:'<span class="dt">—</span>'}</td></tr>`).join(''):`<tr><td colspan="4"><div class="empty">Belum ada data gaji.</div></td></tr>`;
+     <td>${monthLabel(s.effectiveMonth)}</td>
+     <td class="mono">${rp(s.amount)}</td>
+     <td class="dt">${i<hist.length-1?(()=>{const d=s.amount-hist[i+1].amount;return(d>=0?'+':'-')+rp(Math.abs(d));})():'gaji awal'}</td>
+     <td>${s.note?`<span class="dt">${esc(s.note)}</span>`:'<span class="dt">—</span>'}</td>
+     <td style="text-align:right">${hist.length>1?`<button class="btn btn-danger btn-sm" data-del-sal="${s.id}">Hapus</button>`:'<span class="dt">—</span>'}</td></tr>`).join(''):`<tr><td colspan="5"><div class="empty">Belum ada data gaji.</div></td></tr>`;
   return `<div class="panel" style="border-color:var(--gold-soft)">
     <div class="panel-head"><h2>Atur Gaji — ${esc(e.name)}</h2><button class="btn btn-ghost btn-sm" id="salClose">Tutup</button></div>
     <div class="panel-body">
       <p class="dt" style="margin-bottom:14px">Tambahkan perubahan gaji beserta bulan berlakunya. Saat membayar, sistem memakai nilai terbaru yang berlaku ≤ bulan tersebut. Gaji berlaku sekarang: <b>${rp(salaryFor(e,period))}</b>.</p>
       <div class="form-row">
-        <div><label class="lab">Gaji baru (Rp)</label><input class="inp mono" id="salAmt" type="number" min="0" placeholder="0" /></div>
+        <div><label class="lab">Gaji baru (Rp)</label><input class="inp mono" id="salAmt" type="text" inputmode="numeric" placeholder="0" /></div>
         <div><label class="lab">Berlaku mulai</label>${monthYearPicker('salEff',period)}</div>
+        <div><label class="lab">Catatan / Alasan kenaikan</label><input class="inp" id="salNote" placeholder="mis. Kenaikan tahunan, Promosi jabatan" /></div>
       </div>
       <button class="btn btn-gold" id="salSave">Simpan / Naikkan Gaji</button>
     </div>
-    <table><thead><tr><th>Berlaku Mulai</th><th>Gaji</th><th>Perubahan</th><th></th></tr></thead><tbody>${rows}</tbody></table>
+    <table><thead><tr><th>Berlaku Mulai</th><th>Gaji</th><th>Perubahan</th><th>Catatan</th><th></th></tr></thead><tbody>${rows}</tbody></table>
   </div>`;
 }
 
@@ -595,10 +610,12 @@ function bindHandlers(){
   if($('ackSeen'))$('ackSeen').onclick=()=>{markSeen(stmtIdx);toast('Ditandai sudah dilihat ✓');render();};
   if($('projSave'))$('projSave').onclick=saveProj;
   if($('projCancel'))$('projCancel').onclick=resetProjForm;
+  bindRpInput('projValue');
   document.querySelectorAll('[data-edit-proj]').forEach(b=>b.onclick=()=>editProj(b.dataset.editProj));
   document.querySelectorAll('[data-del-proj]').forEach(b=>b.onclick=()=>delProj(b.dataset.delProj));
   document.querySelectorAll('[data-toggle-proj]').forEach(b=>b.onclick=()=>toggleProj(b.dataset.toggleProj));
   if($('exSave'))$('exSave').onclick=saveEx;
+  bindRpInput('exAmt');
   document.querySelectorAll('[data-del-tx]').forEach(b=>b.onclick=()=>delTx(b.dataset.delTx));
   if($('empSave'))$('empSave').onclick=saveEmp;
   if($('empCancel'))$('empCancel').onclick=resetEmpForm;
@@ -609,6 +626,8 @@ function bindHandlers(){
   if($('payAll'))$('payAll').onclick=payAll;
   if($('salClose'))$('salClose').onclick=()=>{salaryEditEmpId=null;render();};
   if($('salSave'))$('salSave').onclick=addSalary;
+  bindRpInput('salAmt');
+  bindRpInput('empSalary');
   document.querySelectorAll('[data-del-sal]').forEach(b=>b.onclick=()=>delSalary(b.dataset.delSal));
   document.querySelectorAll('[data-role-for]').forEach(s=>s.onchange=()=>changeRole(s.dataset.roleFor,s.value));
   document.querySelectorAll('[data-toggle-active]').forEach(b=>b.onclick=()=>toggleActive(b.dataset.toggleActive));
@@ -623,7 +642,7 @@ async function guard(promise,okMsg){
 /* proyek */
 async function saveProj(){
   const id=$('projId').value,name=$('projName').value.trim(),client=$('projClient').value.trim();
-  const value=Math.round(Number($('projValue').value));
+  const value=rpVal($('projValue'));
   const start=readMY('projStart'),end=readMY('projEnd'),status=$('projStatus').value;
   if(!name){toast('Nama proyek wajib diisi');return;}
   if(!(value>0)){toast('Nilai harus lebih dari 0');return;}
@@ -633,7 +652,8 @@ async function saveProj(){
   else{row.created_by=current.id;if(await guard(sb.from('projects').insert(row),'Proyek ditambahkan ✓'))resetProjForm();}
 }
 function editProj(id){const p=DB.projects.find(x=>x.id===id);if(!p)return;
-  $('projId').value=p.id;$('projName').value=p.name;$('projClient').value=p.client||'';$('projValue').value=p.value;
+  $('projId').value=p.id;$('projName').value=p.name;$('projClient').value=p.client||'';
+  $('projValue').value=rpFmt(String(p.value));
   setMY('projStart',p.startMonth);setMY('projEnd',p.endMonth);$('projStatus').value=p.status;
   $('projFormTitle').textContent='Ubah Proyek';$('projCancel').classList.remove('hidden');window.scrollTo({top:0,behavior:'smooth'});}
 function resetProjForm(){if(!$('projId'))return;$('projId').value='';$('projName').value='';$('projClient').value='';$('projValue').value='';setMY('projStart',thisPeriod());setMY('projEnd',thisPeriod());$('projStatus').value='disetujui';$('projFormTitle').textContent='Tambah Proyek / Penawaran';$('projCancel').classList.add('hidden');}
@@ -641,7 +661,7 @@ async function delProj(id){if(!await uiConfirm('Hapus proyek ini? Pemasukannya h
 async function toggleProj(id){const p=DB.projects.find(x=>x.id===id);if(!p)return;const ns=p.status==='disetujui'?'penawaran':'disetujui';guard(sb.from('projects').update({status:ns}).eq('id',id),ns==='disetujui'?'Proyek dihitung sebagai pemasukan ✓':'Proyek tidak dihitung');}
 
 /* pengeluaran */
-async function saveEx(){const cat=$('exCat').value.trim(),amt=Math.round(Number($('exAmt').value)),note=$('exNote').value.trim();
+async function saveEx(){const cat=$('exCat').value.trim(),amt=rpVal($('exAmt')),note=$('exNote').value.trim();
   if(!cat){toast('Kategori wajib diisi');return;}if(!(amt>0)){toast('Jumlah harus lebih dari 0');return;}
   guard(sb.from('expenses').insert({category:cat,amount:amt,note,occurred_at:new Date().toISOString(),source:'manual',created_by:current.id}),'Pengeluaran tersimpan ✓');}
 async function delTx(id){if(!await uiConfirm('Hapus pengeluaran ini?','Hapus'))return;guard(sb.from('expenses').delete().eq('id',id),'Pengeluaran dihapus');}
@@ -651,7 +671,7 @@ async function saveEmp(){
   const id=$('empId').value,name=$('empName').value.trim(),pos=$('empPos').value.trim();
   if(!name){toast('Nama wajib diisi');return;}
   if(id){if(await guard(sb.from('employees').update({name,position:pos}).eq('id',id),'Data karyawan diperbarui ✓'))resetEmpForm();return;}
-  const amt=Math.round(Number($('empSalary').value));const eff=readMY('empSalEff');
+  const amt=rpVal($('empSalary'));const eff=readMY('empSalEff');
   if(!(amt>=0)){toast('Gaji awal tidak valid');return;}
   const {data,error}=await sb.from('employees').insert({name,position:pos,active:true}).select().single();
   if(error){toast('Gagal: '+error.message);return;}
@@ -664,9 +684,9 @@ function editEmp(id){const e=DB.employees.find(x=>x.id===id);if(!e)return;
 function resetEmpForm(){if(!$('empId'))return;$('empId').value='';$('empName').value='';$('empPos').value='';if($('empSalary'))$('empSalary').value='';$('empSalaryGroup').classList.remove('hidden');$('empFormTitle').textContent='Tambah Karyawan';$('empCancel').classList.add('hidden');}
 async function delEmp(id){if(!await uiConfirm('Hapus karyawan ini? Riwayat gaji yang sudah dibayar tetap tersimpan.','Hapus'))return;if(salaryEditEmpId===id)salaryEditEmpId=null;guard(sb.from('employees').delete().eq('id',id),'Karyawan dihapus');}
 async function addSalary(){const e=DB.employees.find(x=>x.id===salaryEditEmpId);if(!e)return;
-  const amt=Math.round(Number($('salAmt').value));const eff=readMY('salEff');
+  const amt=rpVal($('salAmt'));const eff=readMY('salEff');const note=$('salNote').value.trim();
   if(!(amt>=0)){toast('Gaji tidak valid');return;}
-  guard(sb.from('salaries').upsert({employee_id:e.id,effective_month:eff,amount:amt},{onConflict:'employee_id,effective_month'}),'Gaji diperbarui ✓');}
+  guard(sb.from('salaries').upsert({employee_id:e.id,effective_month:eff,amount:amt,note},{onConflict:'employee_id,effective_month'}),'Gaji diperbarui ✓');}
 async function delSalary(sid){const e=DB.employees.find(x=>x.id===salaryEditEmpId);if(!e)return;
   if((e.salaries||[]).length<=1){toast('Minimal harus ada satu data gaji');return;}
   if(!await uiConfirm('Hapus data gaji ini?','Hapus'))return;guard(sb.from('salaries').delete().eq('id',sid),'Data gaji dihapus');}
